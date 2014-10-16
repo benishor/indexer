@@ -1,0 +1,336 @@
+<html>
+<head>
+	<title>doc.search</title>
+	<script src="js/jquery-1.11.0.min.js"></script>
+	<script src="js/jquery-migrate-1.2.1.min.js"></script>
+	<script language="javascript">
+
+		function humanFileSize(bytes, si) {
+		    var thresh = si ? 1000 : 1024;
+		    if(bytes < thresh) return bytes + ' B';
+		    var units = si ? ['kB','MB','GB','TB','PB','EB','ZB','YB'] : ['KiB','MiB','GiB','TiB','PiB','EiB','ZiB','YiB'];
+		    var u = -1;
+		    do {
+		        bytes /= thresh;
+		        ++u;
+		    } while(bytes >= thresh);
+		    return bytes.toFixed(1)+' '+units[u];
+		};
+
+		function humanDate(epochMilliseconds) {
+			var date = new Date(parseInt(epochMilliseconds));
+			var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+			return date.getDay() + ' ' + months[date.getMonth()] + ' ' + date.getFullYear() + ' ' + date.getHours() + ':' + date.getMinutes(); 
+		}
+
+		function htmlEncode(text) {
+			return $('<div/>').text(text).html();
+		}
+
+		function renderResult(hit) {
+			$result = $('.resultTemplate').clone().removeClass('resultTemplate');
+
+			var title = (hit.highlight && hit.highlight.filename) ? hit.highlight.filename : htmlEncode(hit.fields.filename);
+			if (hit.fields["content.title"] != undefined && hit.fields["content.title"] != '')
+				title = (hit.highlight && hit.highlight["title"]) ? hit.highlight["title"] : htmlEncode(hit.fields["content.title"]);
+
+			var $link = $('<a>').html(title).attr('href', 'http://localhost/books' + hit.fields.dirname + hit.fields.filename).attr('target', '_blank');
+
+			$('.result-title', $result).append($link);
+			$('.result-filename', $result).html((hit.highlight && hit.highlight.filename) ? hit.highlight.filename : htmlEncode(hit.fields.filename));
+			$('.result-dirname', $result).html((hit.highlight && hit.highlight.dirname) ? hit.highlight.dirname : htmlEncode(hit.fields.dirname));
+			$('.result-filesize', $result).text(humanFileSize(hit.fields.filesize));
+			$('.result-filetime', $result).text(humanDate(hit.fields.filetime));
+
+			return $result;
+		}
+
+		function doSearch(keyword) {
+			var vars = {
+				from: 0,
+				size: 10,
+				fields: ["title", "author", "content_type", "filename", "basename", "dirname", "checksum", "filesize", "filetime"],
+
+				query: { 
+
+					"multi_match": {
+					    "query": keyword,
+					    "fields": [ "filename^2", "title^2", "dirname^2", "content" ],
+					    "type": "most_fields",
+					    "fuzziness": 2,
+					    "prefix_length": 1
+					}
+
+					// match:{  
+					// 	_all:{  
+					// 		query: keyword,
+					// 		fuzziness: 2,
+					// 		prefix_length: 1
+					// 	}
+					// }
+				},
+
+				// query: {
+					// query_string: {
+  			// 			query: keyword
+					// },
+				// },
+				highlight: {
+					fields: {
+						content: {},
+						title: {},
+						author: {},
+						filename: {},
+						dirname: {}
+					}
+				}
+			};
+
+			// for (var i in vars.fields) {
+			// 	vars.query.match[vars.fields[i]] = {
+			// 		"query": keyword,
+			// 		"fuzziness": 3,
+			// 		"prefix_length": 1
+			// 	}
+			// }
+
+			$.ajax({
+				url: 'http://localhost:9200/documents/_search?pretty=true',
+				type: 'POST',
+				crossDomain: true,
+				dataType: 'json',
+				data: JSON.stringify(vars),
+				async: true,
+				success: function(data) {
+					console.log(data);
+					$('#results').empty();
+					for (var i in data.hits.hits) {
+						$('#results').append(renderResult(data.hits.hits[i]));
+					}
+				}
+			});
+		}
+
+		$(function() {
+			$('#search').focus(function() {
+				$('.result-selected').removeClass('result-selected');
+			}).focus();
+
+
+			$(document).keydown(function(e) {
+				var keyCode = e.keyCode || e.which;
+				if (e.target.id != 'search') {
+					switch (keyCode) {
+						case 38:
+							if ($('.result-selected').prev('.result-holder').length > 0) {
+	 							$('.result-selected').removeClass('result-selected').prev('.result-holder').addClass('result-selected').find('.result-title a').focus();
+ 							} else {
+ 								$('.result-selected').removeClass('result-selected');
+ 								$('#search').focus();
+ 							}
+ 								// if ($('.result-selected').length == 0) {
+ 								// 	$('#search').focus();
+ 								// }
+								e.preventDefault();
+							break;
+						case 40:
+							if ($('.result-selected').next('.result-holder').length > 0) {
+								$('.result-selected').removeClass('result-selected').next('.result-holder').addClass('result-selected').find('.result-title a').focus();
+							}
+							e.preventDefault();
+							break;
+						case 191: // slash
+							$('#search').focus().select();
+							e.preventDefault();
+							break;
+					}
+				}
+			});
+
+			$('#search').keydown(function(e) {
+				var keyCode = e.keyCode || e.which;
+				console.log(keyCode);
+				switch (keyCode) {
+					case 38: // up
+						break;
+					case 40: // down
+						if ($('.result-selected').length == 0) {
+							var results = $('.result-holder');
+							if (results.length > 0)
+								$(results[0]).addClass('result-selected');
+								$('.result-title a', results[0]).focus();
+								e.preventDefault();
+						}
+						break;
+					case 13:
+						if ($(this).val() == '') {
+							$('#results').empty();
+						} else {
+							doSearch($(this).val())
+						}
+						break;
+				}
+			});
+		});
+	</script>
+	<style type="text/css">
+	<!--
+
+		#results {
+			float: left;
+			width: 100%;
+			display: block;
+			/*border: 1px solid red;*/
+		}
+
+		#results-holder {
+			float: left;
+			padding-left: 60pt;
+			padding-right: 60pt;
+			padding-top: 20pt;
+			margin: auto;
+			/*border: 1px solid red;*/
+		}
+
+		.resultTemplate {
+			display: none;
+		}
+
+		.result-holder {
+			float: left;
+			width: 100%;
+			/*display: block;*/
+			/*border: 1px solid red;*/
+			clear: both;
+			margin-bottom: 10pt;
+			font-size: 10pt;
+		}
+
+		.result-title {
+			float: left;
+			display: block;
+			font-weight: bold;
+			width: 100%;
+			font-size: 1.2em;
+			padding-bottom: 0.5em;
+		}
+
+
+		.result-title a {
+			color: #90a959;
+		}
+
+		.result-selected a {
+			color: red;
+		}
+
+		.result-holder em {
+			color: #90a959;
+		}
+
+		.result-title a em {
+			color: #fff;
+			background-color: #90a959;
+			padding-left: 0.2em;
+			padding-right: 0.2em;
+			/*padding-right: 0.1em;*/
+		}
+
+		.result-selected .result-title a em {
+			color: #fff;
+			background-color: red;
+			padding-left: 0.2em;
+			padding-right: 0.2em;
+			/*padding-right: 0.1em;*/
+		}
+
+		.result-bolded {
+			font-weight: bold;
+		}
+
+		.result-description {
+			float: left;
+			display: block;
+			width: 100%;
+		}
+
+		.result-label {
+			float: left;
+			display: block;
+			width: 10em;
+			margin-left: 10pt;
+		} 
+
+		.result-value {
+			float: left;
+			display: block;
+			clear: right;
+		} 
+
+		.result-info {
+			float: left;
+			display: block;
+			width: 100%;
+			clear: both;
+		}
+
+		#search {
+			font-size: 18pt;
+			margin: auto;
+			margin-top: 20pt;
+			display: block;
+			/*float: left;*/
+			padding: 0.2em 0.5em 0.2em 0.5em;
+			border: 1px solid #a0a0a0;
+			background-color: #304919;
+			color: #ccc;
+		}
+
+		#header {
+			display: block;
+			float: left;
+			width: 100%;
+			background-color: #90a959;
+			height: 70pt;
+			position: relative;
+		}
+
+		body {
+			padding: 0;
+			margin: 0;
+		}
+
+	-->
+	</style>
+</head>
+<body>
+	<div id="header">
+		<input type="text" id="search" name="search" size="40" value=""/>
+	</div>
+
+	<div id="results-holder"><div id="results"></div></div>
+
+	<div class="result-holder resultTemplate">
+		<div class="result-title"></div>
+		<div class="result-description">
+			<div class="result-info">
+				<div class="result-label">Path</div>
+				<div class="result-value result-dirname result-bolded"></span>
+			</div>
+			<div class="result-info">
+				<div class="result-label">Filename</div>
+				<div class="result-value result-filename result-bolded"></span>
+			</div>
+			<div class="result-info">
+				<div class="result-label">Filesize</div>
+				<div class="result-value result-filesize"></span>
+			</div>
+			<div class="result-info">
+				<div class="result-label">Last changed</div>
+				<div class="result-value result-filetime"></span>
+			</div>
+		<div>
+	</div>
+
+</body>
+</html>
