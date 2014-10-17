@@ -6,10 +6,16 @@ import os.path
 import time
 import hashlib
 import binascii
+import subprocess
+import json
 
 ALLOWED_EXTENSIONS = ('.pdf', '.doc', '.docx', '.epub', '.mobi', '.txt', '.rtf', '.ppt', '.py', '.zip', '.rar', '.chm')
 CONTENT_INDEXABLE_EXTENSIONS = ('.pdf', '.doc', '.docx', '.epub', '.txt', '.rtf', '.ppt', '.chm')
+CONTENT_INDEXABLE_MAX_SIZE = 60 * 1024 * 1024;
 INDEX_NAME = "documents"
+CONFIG = {
+	'verbose': False
+}
 
 def isIndexable(f):
 	return f.lower().endswith(ALLOWED_EXTENSIONS)
@@ -27,32 +33,52 @@ def md5ForFile(filename, blockSize=8192):
 def indexFile(absoluteFilename, dirname):
 	if isIndexable(absoluteFilename):
 
-		print "- indexing {0}".format(absoluteFilename)
-
 		fileUniqueId = hashlib.sha224(absoluteFilename).hexdigest()
-		fileChecksum = md5ForFile(absoluteFilename)
-		fileSize = os.path.getsize(absoluteFilename)
 		fileTime = int(os.path.getmtime(absoluteFilename) * 1000) # ES wants millis as input for datetime
 
-		basename = os.path.basename(absoluteFilename)
+		if CONFIG['verbose']:
+			print "- checking {0}".format(absoluteFilename)
 
-		# construct indexing request body
-		contentField = ""
-		if isContentIndexable(basename):
-			contentField = """, \\\"content\\\": \\\"$(base64 \'{0}\')\\\"""".format(absoluteFilename)
+		# check if we have a previous matching record
+		output = subprocess.check_output("curl -s -XGET \"http://localhost:9200/{0}/document/{1}\"".format(INDEX_NAME, fileUniqueId), shell=True);
+		data = json.loads(output);
+		if (not data["found"] or (data["found"] and fileTime > int(data["_source"]["filetime"]))):
 
-		command = """echo "{{\\\"filename\\\": \\\"{0}\\\", \\\"dirname\\\": \\\"{1}\\\", \\\"checksum\\\": \\\"{2}\\\", \\\"filesize\\\": \\\"{3}\\\", \\\"filetime\\\": \\\"{4}\\\" {5} }}" > /tmp/docToIndex.txt""".format(basename, dirname, fileChecksum, fileSize, fileTime, contentField)
-		os.system(command)
+			fileChecksum = md5ForFile(absoluteFilename)
+			fileSize = os.path.getsize(absoluteFilename)
+			basename = os.path.basename(absoluteFilename)
 
-		# print command
+			if (data["found"] and fileChecksum == data["_source"]["checksum"]):
+				if CONFIG['verbose']:
+					print "\t- file found with same checksum. skipping indexing"
+				return
 
-		# fire away the request
-		command = 'curl -i -XPUT http://localhost:9200/{0}/document/{1} -d @/tmp/docToIndex.txt'.format(INDEX_NAME, fileUniqueId)
-		os.system(command)
+			print "- indexing {0}".format(absoluteFilename)
+
+			# construct indexing request body
+			contentField = ""
+			if isContentIndexable(basename) and fileSize < CONTENT_INDEXABLE_MAX_SIZE:
+				contentField = """, \\\"content\\\": \\\"$(base64 \'{0}\')\\\"""".format(absoluteFilename.replace("'", r"'\''"))
+
+			command = """echo "{{\\\"filename\\\": \\\"{0}\\\", \\\"dirname\\\": \\\"{1}\\\", \\\"checksum\\\": \\\"{2}\\\", \\\"filesize\\\": \\\"{3}\\\", \\\"filetime\\\": \\\"{4}\\\" {5} }}" > /tmp/docToIndex.txt""".format(basename, dirname, fileChecksum, fileSize, fileTime, contentField)
+			output = subprocess.check_output(command, shell=True);
+
+			# fire away the request
+			command = 'curl -i -XPUT http://localhost:9200/{0}/document/{1} -d @/tmp/docToIndex.txt'.format(INDEX_NAME, fileUniqueId)
+			try:
+				output = subprocess.check_output(command, shell=True);
+			except subprocess.CalledProcessError as e:
+				print "- failed to index {0}. Reason {1}".format(absoluteFilename, e.output);
+
+		else:
+			if CONFIG['verbose']:
+				print "\t- file timestamp not changed. skipping indexing"
+			return
+
 
 def dropIndex():
-	command = 'curl -X DELETE http://localhost:9200/{0}'.format(INDEX_NAME)
-	os.system(command)
+	command = 'curl -s -X DELETE http://localhost:9200/{0}'.format(INDEX_NAME)
+	output = subprocess.check_output(command, shell=True);
 
 def createIndex():
 				      # "_source" : {"excludes" : ["content"]},
@@ -88,12 +114,12 @@ def createIndex():
 				  }
 				}'"""
 
-	command = 'curl -XPOST http://localhost:9200/{0} -d {1}'.format(INDEX_NAME, mapping)
-	os.system(command)
+	command = 'curl -s -XPOST http://localhost:9200/{0} -d {1}'.format(INDEX_NAME, mapping)
+	output = subprocess.check_output(command, shell=True);
 
 # ---------------------------------
 
-dropIndex()
+# dropIndex()
 createIndex()
 
 folder = os.path.abspath("/home/benny/Dropbox/books")
@@ -102,11 +128,3 @@ for root, dirs, files in os.walk(folder):
     resourcePath = os.path.abspath(root)[len(folder):] + "/"
     for file in files:
 		indexFile(os.path.abspath(os.path.join(root, file)), resourcePath)
-
-# folder = "."
-# for filename in os.listdir(folder):
-# 	absoluteFilename = os.path.abspath(os.path.join(folder, filename))
-# 	if isIndexable(absoluteFilename):
-# 		indexFile(absoluteFilename, folder)
-
-
