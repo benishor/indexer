@@ -52,30 +52,18 @@
 				fields: ["title", "author", "content_type", "filename", "basename", "dirname", "checksum", "filesize", "filetime"],
 
 				query: { 
-
-					"multi_match": {
-					    "query": keyword,
-					    "fields": [ "filename^2", "title^2", "dirname^2", "content" ],
-					    "type": "most_fields",
-					    "fuzziness": 2,
-					    "prefix_length": 1
+					multi_match: {
+					    query: keyword,
+					    fields: ["filename^2", "title^2", "dirname^2", "content"],
+					    type: "most_fields",
+					    fuzziness: 2,
+					    prefix_length: 1
 					}
-
-					// match:{  
-					// 	_all:{  
-					// 		query: keyword,
-					// 		fuzziness: 2,
-					// 		prefix_length: 1
-					// 	}
-					// }
 				},
 
-				// query: {
-					// query_string: {
-  			// 			query: keyword
-					// },
-				// },
 				highlight: {
+					pre_tags: ["<span class=\"highlight\">"],
+					post_tags: ["</span>"],
 					fields: {
 						content: {},
 						title: {},
@@ -86,13 +74,6 @@
 				}
 			};
 
-			// for (var i in vars.fields) {
-			// 	vars.query.match[vars.fields[i]] = {
-			// 		"query": keyword,
-			// 		"fuzziness": 3,
-			// 		"prefix_length": 1
-			// 	}
-			// }
 
 			$.ajax({
 				url: 'http://localhost:9200/documents/_search?pretty=true',
@@ -128,10 +109,7 @@
  								$('.result-selected').removeClass('result-selected');
  								$('#search').focus();
  							}
- 								// if ($('.result-selected').length == 0) {
- 								// 	$('#search').focus();
- 								// }
-								e.preventDefault();
+							e.preventDefault();
 							break;
 						case 40:
 							if ($('.result-selected').next('.result-holder').length > 0) {
@@ -224,11 +202,11 @@
 			color: red;
 		}
 
-		.result-holder em {
+		.result-holder .highlight {
 			color: #90a959;
 		}
 
-		.result-title a em {
+		.result-title a .highlight {
 			color: #fff;
 			background-color: #90a959;
 			padding-left: 0.2em;
@@ -236,12 +214,8 @@
 			/*padding-right: 0.1em;*/
 		}
 
-		.result-selected .result-title a em {
-			color: #fff;
+		.result-selected .result-title a .highlight {
 			background-color: red;
-			padding-left: 0.2em;
-			padding-right: 0.2em;
-			/*padding-right: 0.1em;*/
 		}
 
 		.result-bolded {
