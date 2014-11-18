@@ -20,7 +20,8 @@ function htmlEncode(text) {
 	return $('<div/>').text(text).html();
 }
 
-var BenSearch = {
+BenSearch = {
+	config : {},
 	searcher : {
 		vars : {},
 		currentPage : 0,
@@ -56,7 +57,7 @@ var BenSearch = {
 			BenSearch.searcher.vars = vars;
 
 			$.ajax({
-				url: 'http://localhost:9200/documents/_search?pretty=true',
+				url: 'http://' + BenSearch.config['es.host'] + '/documents/_search?pretty=true',
 				type: 'POST',
 				crossDomain: true,
 				dataType: 'json',
@@ -85,7 +86,9 @@ var BenSearch = {
 		}
 	},
 
-	init : function() {
+	init : function(config) {
+		BenSearch.config = config;
+
 		$('#search').focus(function() {
 			$('.result-selected').removeClass('result-selected');
 		}).focus();
@@ -174,7 +177,7 @@ var BenSearch = {
 			if (hit.fields["content.title"] != undefined && hit.fields["content.title"] != '')
 				title = (hit.highlight && hit.highlight["title"]) ? hit.highlight["title"] : htmlEncode(hit.fields["content.title"]);
 
-			var $link = $('<a>').html(title).attr('href', 'http://localhost/books' + hit.fields.dirname + hit.fields.filename).attr('target', '_blank');
+			var $link = $('<a>').html(title).attr('href', BenSearch.config['hit.origin'] + hit.fields.dirname + hit.fields.filename).attr('target', '_blank');
 
 			$('.result-title', $result).append($link);
 			$('.result-filename', $result).html((hit.highlight && hit.highlight.filename) ? hit.highlight.filename : htmlEncode(hit.fields.filename));
