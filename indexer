@@ -8,6 +8,10 @@ import binascii
 import subprocess
 import json
 import argparse
+import Queue
+from threading import Thread
+from tempfile import mkstemp
+import signal
 
 ALLOWED_EXTENSIONS = ('.pdf', '.doc', '.docx', '.epub', '.mobi', '.txt', '.rtf', '.ppt', '.py', '.zip', '.rar', '.chm')
 CONTENT_INDEXABLE_EXTENSIONS = ('.pdf', '.doc', '.docx', '.epub', '.txt', '.rtf', '.ppt', '.chm')
@@ -15,8 +19,18 @@ CONTENT_INDEXABLE_MAX_SIZE = 60 * 1024 * 1024;
 INDEX_NAME = "documents"
 CONFIG = {
     'es.host': 'localhost:9200',
+    'worker.threads': 1,
     'verbose': True,
+    'quiet': False,
+    'index.content': True
 }
+
+WORK_QUEUE = Queue.Queue()
+
+
+def signalHandler(signum, frame):
+    print 'Caught signal. Clearing work queue and exiting.'
+    sys.exit(4)
 
 def log(what):
     if CONFIG['verbose']:
@@ -71,16 +85,22 @@ def indexFile(absoluteFilename, dirname):
 
             # construct indexing request body
             contentField = ""
-            if isContentIndexable(basename) and fileSize < CONTENT_INDEXABLE_MAX_SIZE:
+            if CONFIG['index.content'] and isContentIndexable(basename) and fileSize < CONTENT_INDEXABLE_MAX_SIZE:
                 contentField = """, \\\"content\\\": \\\"$(base64 \'{0}\')\\\"""".format(absoluteFilename.replace("'", r"'\''"))
 
-            command = """echo "{{\\\"filename\\\": \\\"{0}\\\", \\\"dirname\\\": \\\"{1}\\\", \\\"checksum\\\": \\\"{2}\\\", \\\"filesize\\\": \\\"{3}\\\", \\\"filetime\\\": \\\"{4}\\\" {5} }}" > /tmp/docToIndex.txt""".format(basename, dirname, fileChecksum, fileSize, fileTime, contentField)
+            fd, tempPath = mkstemp()
+
+            command = """echo "{{\\\"filename\\\": \\\"{0}\\\", \\\"dirname\\\": \\\"{1}\\\", \\\"checksum\\\": \\\"{2}\\\", \\\"filesize\\\": \\\"{3}\\\", \\\"filetime\\\": \\\"{4}\\\" {5} }}" > {6}""".format(basename, dirname, fileChecksum, fileSize, fileTime, contentField, tempPath)
             execute(command)
 
             # fire away the request
-            command = 'curl -s -i -XPUT http://{0}/{1}/document/{2} -d @/tmp/docToIndex.txt'.format(CONFIG['es.host'], INDEX_NAME, fileUniqueId)
+            command = 'curl -s -i -XPUT http://{0}/{1}/document/{2} -d @{3}'.format(CONFIG['es.host'], INDEX_NAME, fileUniqueId, tempPath)
             if not execute(command):
                 logAlways("- failed to index {0}")
+
+            # clean up the temp file
+            os.close(fd)
+            os.remove(tempPath)
 
         else:
             log("\t- file timestamp not changed. skipping indexing")
@@ -140,7 +160,17 @@ def recreateIndex():
     logAlways("ES index recreated on host {0}".format(CONFIG['es.host']))
 
 
+def indexWorker():
+    while (True):
+        item = WORK_QUEUE.get()
+        indexFile(item['absoluteFilename'], item['dirname']);
+        WORK_QUEUE.task_done()
+
+
 def indexFilesStartingAt(docroot):
+
+    signal.signal(signal.SIGINT, signalHandler)
+
     folder = os.path.abspath(docroot)
     if os.path.isdir(folder):
         log("Starting to index documents from docroot {0} to ES host {1}".format(docroot, CONFIG['es.host']))
@@ -148,22 +178,45 @@ def indexFilesStartingAt(docroot):
         for root, dirs, files in os.walk(folder):
             resourcePath = os.path.abspath(root)[len(folder):] + "/"
             for file in files:
-                indexFile(os.path.abspath(os.path.join(root, file)), resourcePath)
+                WORK_QUEUE.put({'absoluteFilename': os.path.abspath(os.path.join(root, file)), 'dirname': resourcePath});
+                # indexFile(os.path.abspath(os.path.join(root, file)), resourcePath)
+
+        print "Items to process ", WORK_QUEUE.qsize()
+
+        for i in range(CONFIG['worker.threads']):
+             t = Thread(group=None, target=indexWorker)
+             t.daemon = True
+             t.start()
+
+        WORK_QUEUE.join();
+
     else:
         logAlways("Invalid docroot path {0}".format(docroot))
         sys.exit(1)
 
 # ---------------------------------
 
+def checkNegative(value):
+    ivalue = int(value)
+    if ivalue < 0:
+         raise argparse.ArgumentTypeError("%s is an invalid positive int value" % value)
+    return ivalue
+
 parser = argparse.ArgumentParser(description='Bensearch indexer script.')
 parser.add_argument('action', choices=['install', 'index'], help='the type of action to perform. install recreates the ES schema while index recursively parses the specified directory and adds the data to ES')
 parser.add_argument('-v', '--verbose', help='increase output verbosity', required=False, action="store_true")
 parser.add_argument('-s', '--server', help='elasticsearch server locator. defaults to {0}'.format(CONFIG['es.host']), required=False)
 parser.add_argument('-d', '--docroot', help="path to the root directory from which to start indexing recursively", required=False)
+parser.add_argument('-w', '--worker-threads', type=checkNegative,  help="number of parallel indexing threads", required=False)
+parser.add_argument('-n', '--no-content', help='do not index documents'' content', required=False, action="store_true")
 args = parser.parse_args()
 
 CONFIG['verbose'] = args.verbose
 CONFIG['es.host'] = args.server if args.server else CONFIG['es.host']
+CONFIG['worker.threads'] = args.worker_threads if args.worker_threads else CONFIG['worker.threads']
+CONFIG['index.content'] = False if args.no_content else True
+
+print "Configured with {0} threads".format(CONFIG['worker.threads'])
 
 if args.action == 'install':
     recreateIndex()
